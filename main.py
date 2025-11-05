@@ -15,6 +15,7 @@ import json
 from datetime import datetime
 from dotenv import load_dotenv
 from azure.core.credentials import AzureKeyCredential
+from azure.ai.documentintelligence.aio import DocumentIntelligenceClient as AsyncDocumentIntelligenceClient
 from azure.ai.documentintelligence import DocumentIntelligenceClient
 from azure.ai.documentintelligence.models import DocumentAnalysisFeature
 
@@ -43,7 +44,7 @@ app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 def get_document_intelligence_client() -> DocumentIntelligenceClient:
     """
-    Initialize and return Azure Document Intelligence client.
+    Initialize and return Azure Document Intelligence client (sync).
     
     Returns:
         DocumentIntelligenceClient: Configured client instance
@@ -64,6 +65,31 @@ def get_document_intelligence_client() -> DocumentIntelligenceClient:
     
     credential = AzureKeyCredential(key)
     return DocumentIntelligenceClient(endpoint=endpoint, credential=credential)
+
+
+def get_async_document_intelligence_client() -> AsyncDocumentIntelligenceClient:
+    """
+    Initialize and return async Azure Document Intelligence client.
+    
+    Returns:
+        AsyncDocumentIntelligenceClient: Configured async client instance
+        
+    Raises:
+        HTTPException: If Azure credentials are not configured
+    """
+    endpoint = os.getenv("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT")
+    key = os.getenv("AZURE_DOCUMENT_INTELLIGENCE_KEY")
+    
+    if not endpoint or not key:
+        raise HTTPException(
+            status_code=500,
+            detail="Azure Document Intelligence credentials not configured. "
+                   "Please set AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT and "
+                   "AZURE_DOCUMENT_INTELLIGENCE_KEY environment variables."
+        )
+    
+    credential = AzureKeyCredential(key)
+    return AsyncDocumentIntelligenceClient(endpoint=endpoint, credential=credential)
 
 
 def extract_fields_from_result(analyze_result: Any) -> List[Dict[str, Any]]:
@@ -294,19 +320,23 @@ async def root():
     return "<h1>Document Intelligence Demo</h1><p>Please create static/index.html</p>"
 
 
-async def process_single_document(client, file_content: bytes, filename: str, model_id: str, job_id: str, file_index: int, total_files: int):
+async def process_single_document(file_content: bytes, filename: str, model_id: str, job_id: str, file_index: int, total_files: int):
     """Process a single document and update status."""
+    client = None
     try:
         # Update status: Starting
         processing_status[job_id]["files"][file_index]["status"] = "processing"
         processing_status[job_id]["files"][file_index]["message"] = "Uploading to Azure..."
+        
+        # Get async client
+        client = get_async_document_intelligence_client()
         
         # Convert file content to BytesIO
         file_stream = BytesIO(file_content)
         file_stream.seek(0)
         
         # Update status: Analyzing
-        processing_status[job_id]["files"][file_index]["message"] = "Analyzing document..."
+        processing_status[job_id]["files"][file_index]["message"] = "Sending to Azure..."
         
         # Specify expected fields
         expected_fields = [
@@ -315,9 +345,11 @@ async def process_single_document(client, file_content: bytes, filename: str, mo
             "TotalEnergyCharge"
         ]
         
-        # Call Azure API based on model type
+        # Call Azure API based on model type (using await for async)
+        processing_status[job_id]["files"][file_index]["message"] = "Calling Azure API..."
+        
         if model_id.startswith("prebuilt-"):
-            poller = client.begin_analyze_document(
+            poller = await client.begin_analyze_document(
                 model_id=model_id,
                 body=file_stream,
                 content_type="application/pdf",
@@ -328,16 +360,18 @@ async def process_single_document(client, file_content: bytes, filename: str, mo
                 query_fields=expected_fields
             )
         else:
-            poller = client.begin_analyze_document(
+            poller = await client.begin_analyze_document(
                 model_id=model_id,
                 body=file_stream,
                 content_type="application/pdf"
             )
         
-        # Update status: Waiting for result
-        processing_status[job_id]["files"][file_index]["message"] = "Extracting fields..."
+        # Poll the Azure poller for progress updates (async)
+        processing_status[job_id]["files"][file_index]["message"] = "Waiting for Azure response..."
         
-        analyze_result = poller.result()
+        analyze_result = await poller.result()
+        
+        processing_status[job_id]["files"][file_index]["message"] = "Extracting fields..."
         
         # Extract fields
         fields = extract_fields_from_result(analyze_result)
@@ -361,6 +395,10 @@ async def process_single_document(client, file_content: bytes, filename: str, mo
             "error": str(e),
             "fields": []
         }
+    finally:
+        # Close async client
+        if client:
+            await client.close()
 
 
 @app.post("/api/analyze")
@@ -407,7 +445,6 @@ async def analyze_documents(files: List[UploadFile] = File(...)):
     
     # Get model ID
     model_id = os.getenv("AZURE_DOCUMENT_MODEL_ID", "prebuilt-layout")
-    client = get_document_intelligence_client()
     
     # Read all files content
     files_content = []
@@ -416,17 +453,17 @@ async def analyze_documents(files: List[UploadFile] = File(...)):
         files_content.append((content, file.filename))
     
     # Start processing asynchronously
-    asyncio.create_task(process_documents_async(client, files_content, job_id, model_id))
+    asyncio.create_task(process_documents_async(files_content, job_id, model_id))
     
     return JSONResponse(content={"job_id": job_id, "total_files": len(files)})
 
 
-async def process_documents_async(client, files_content: List[tuple], job_id: str, model_id: str):
+async def process_documents_async(files_content: List[tuple], job_id: str, model_id: str):
     """Process all documents asynchronously."""
     tasks = []
     for index, (content, filename) in enumerate(files_content):
         task = process_single_document(
-            client, content, filename, model_id, job_id, index, len(files_content)
+            content, filename, model_id, job_id, index, len(files_content)
         )
         tasks.append(task)
     
