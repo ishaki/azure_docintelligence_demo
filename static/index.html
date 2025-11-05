@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document Intelligence Demo</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Document Intelligence Analyzer</h1>
+            <p class="subtitle">Upload PDF documents to extract structured data using Azure AI</p>
+        </header>
+
+        <main>
+            <div class="upload-section">
+                <div class="upload-area" id="uploadArea">
+                    <div class="upload-icon">📄</div>
+                    <p class="upload-text">Drag and drop PDF files here</p>
+                    <p class="upload-subtext">or</p>
+                    <button class="btn btn-primary" id="selectFilesBtn">Select Files</button>
+                    <input type="file" id="fileInput" multiple accept=".pdf" style="display: none;">
+                    <p class="upload-hint">Only PDF files are supported. Multiple files allowed.</p>
+                </div>
+
+                <div class="files-list" id="filesList"></div>
+
+                <div class="action-buttons">
+                    <button class="btn btn-success" id="uploadBtn" disabled>
+                        <span class="btn-icon">📤</span>
+                        Upload and Extract
+                    </button>
+                    <button class="btn btn-secondary" id="clearBtn" style="display: none;">
+                        Clear All
+                    </button>
+                </div>
+            </div>
+
+            <div class="results-section" id="resultsSection" style="display: none;">
+                <h2>Analysis Results</h2>
+                <div class="results-container" id="resultsContainer"></div>
+            </div>
+
+            <div class="loading-overlay" id="loadingOverlay" style="display: none;">
+                <div class="spinner"></div>
+                <p>Processing documents...</p>
+            </div>
+        </main>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>
+
