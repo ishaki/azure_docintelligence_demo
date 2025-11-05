@@ -9,7 +9,10 @@ A modern web application for uploading and analyzing PDF documents using Azure D
 - 🤖 Azure Document Intelligence integration
 - 📊 Structured results display (field name, value, confidence)
 - 🎨 Modern, professional UI
-- ⚡ FastAPI backend with async support
+- ⚡ **Asynchronous processing** with real-time progress updates
+- 📈 **Live progress tracking** for each document
+- 🔄 **Concurrent processing** of multiple files
+- ✨ Beautiful progress indicators with file-by-file status
 
 ## Prerequisites
 

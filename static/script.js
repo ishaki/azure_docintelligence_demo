@@ -137,7 +137,8 @@ function clearAll() {
 async function handleUpload() {
     if (selectedFiles.length === 0) return;
     
-    loadingOverlay.style.display = 'flex';
+    // Show progress overlay
+    showProgressOverlay(selectedFiles.length);
     resultsSection.style.display = 'none';
     
     try {
@@ -146,6 +147,7 @@ async function handleUpload() {
             formData.append('files', file);
         });
         
+        // Start async processing
         const response = await fetch('/api/analyze', {
             method: 'POST',
             body: formData
@@ -157,13 +159,105 @@ async function handleUpload() {
         }
         
         const data = await response.json();
-        displayResults(data.results);
+        const jobId = data.job_id;
+        
+        // Poll for status updates
+        await pollJobStatus(jobId);
         
     } catch (error) {
         console.error('Error:', error);
         alert('Error analyzing documents: ' + error.message);
-    } finally {
         loadingOverlay.style.display = 'none';
+    }
+}
+
+function showProgressOverlay(totalFiles) {
+    const overlay = document.getElementById('loadingOverlay');
+    overlay.innerHTML = `
+        <div class="progress-container">
+            <h3>Processing Documents...</h3>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <p id="progressText">Initializing...</p>
+            <div class="files-progress" id="filesProgress"></div>
+        </div>
+    `;
+    overlay.style.display = 'flex';
+}
+
+async function pollJobStatus(jobId) {
+    const maxAttempts = 300; // 5 minutes max
+    const pollInterval = 1000; // 1 second
+    
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        try {
+            const response = await fetch(`/api/status/${jobId}`);
+            const status = await response.json();
+            
+            // Update progress UI
+            updateProgress(status);
+            
+            if (status.status === 'completed') {
+                // Fetch final results
+                const resultsResponse = await fetch(`/api/results/${jobId}`);
+                const results = await resultsResponse.json();
+                displayResults(results.results);
+                loadingOverlay.style.display = 'none';
+                return;
+            }
+            
+            // Wait before next poll
+            await new Promise(resolve => setTimeout(resolve, pollInterval));
+            
+        } catch (error) {
+            console.error('Error polling status:', error);
+            // Continue polling on error
+        }
+    }
+    
+    throw new Error('Processing timeout');
+}
+
+function updateProgress(status) {
+    const totalFiles = status.total_files;
+    const completedFiles = status.files.filter(f => 
+        f.status === 'completed' || f.status === 'error'
+    ).length;
+    
+    const progressPercent = (completedFiles / totalFiles) * 100;
+    
+    // Update progress bar
+    const progressFill = document.getElementById('progressFill');
+    if (progressFill) {
+        progressFill.style.width = `${progressPercent}%`;
+    }
+    
+    // Update text
+    const progressText = document.getElementById('progressText');
+    if (progressText) {
+        progressText.textContent = `Processing ${completedFiles} of ${totalFiles} documents...`;
+    }
+    
+    // Update individual file status
+    const filesProgress = document.getElementById('filesProgress');
+    if (filesProgress) {
+        filesProgress.innerHTML = status.files.map(file => `
+            <div class="file-progress-item ${file.status}">
+                <span class="file-icon">${getStatusIcon(file.status)}</span>
+                <span class="file-name">${file.filename}</span>
+                <span class="file-status">${file.message}</span>
+            </div>
+        `).join('');
+    }
+}
+
+function getStatusIcon(status) {
+    switch(status) {
+        case 'completed': return '✓';
+        case 'processing': return '⏳';
+        case 'error': return '✗';
+        default: return '⋯';
     }
 }
 

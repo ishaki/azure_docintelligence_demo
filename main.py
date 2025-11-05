@@ -6,10 +6,13 @@ from io import BytesIO
 from typing import List, Dict, Any
 from pathlib import Path
 
-from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+import asyncio
+import json
+from datetime import datetime
 from dotenv import load_dotenv
 from azure.core.credentials import AzureKeyCredential
 from azure.ai.documentintelligence import DocumentIntelligenceClient
@@ -19,6 +22,9 @@ from azure.ai.documentintelligence.models import DocumentAnalysisFeature
 load_dotenv()
 
 app = FastAPI(title="Document Intelligence Demo", version="1.0.0")
+
+# Store for tracking processing status
+processing_status = {}
 
 # CORS middleware
 app.add_middleware(
@@ -288,16 +294,85 @@ async def root():
     return "<h1>Document Intelligence Demo</h1><p>Please create static/index.html</p>"
 
 
+async def process_single_document(client, file_content: bytes, filename: str, model_id: str, job_id: str, file_index: int, total_files: int):
+    """Process a single document and update status."""
+    try:
+        # Update status: Starting
+        processing_status[job_id]["files"][file_index]["status"] = "processing"
+        processing_status[job_id]["files"][file_index]["message"] = "Uploading to Azure..."
+        
+        # Convert file content to BytesIO
+        file_stream = BytesIO(file_content)
+        file_stream.seek(0)
+        
+        # Update status: Analyzing
+        processing_status[job_id]["files"][file_index]["message"] = "Analyzing document..."
+        
+        # Specify expected fields
+        expected_fields = [
+            "SupplyAddress1", "SupplyAddress2", "ConsumptionPeriod",
+            "AccountNo", "FixedEnergyPriceRate", "TotalPayWithAllCharges",
+            "TotalEnergyCharge"
+        ]
+        
+        # Call Azure API based on model type
+        if model_id.startswith("prebuilt-"):
+            poller = client.begin_analyze_document(
+                model_id=model_id,
+                body=file_stream,
+                content_type="application/pdf",
+                features=[
+                    DocumentAnalysisFeature.KEY_VALUE_PAIRS,
+                    DocumentAnalysisFeature.QUERY_FIELDS
+                ],
+                query_fields=expected_fields
+            )
+        else:
+            poller = client.begin_analyze_document(
+                model_id=model_id,
+                body=file_stream,
+                content_type="application/pdf"
+            )
+        
+        # Update status: Waiting for result
+        processing_status[job_id]["files"][file_index]["message"] = "Extracting fields..."
+        
+        analyze_result = poller.result()
+        
+        # Extract fields
+        fields = extract_fields_from_result(analyze_result)
+        
+        # Update status: Complete
+        processing_status[job_id]["files"][file_index]["status"] = "completed"
+        processing_status[job_id]["files"][file_index]["message"] = "Completed successfully"
+        processing_status[job_id]["files"][file_index]["result"] = {
+            "filename": filename,
+            "status": "success",
+            "fields": fields
+        }
+        
+    except Exception as e:
+        # Update status: Error
+        processing_status[job_id]["files"][file_index]["status"] = "error"
+        processing_status[job_id]["files"][file_index]["message"] = str(e)
+        processing_status[job_id]["files"][file_index]["result"] = {
+            "filename": filename,
+            "status": "error",
+            "error": str(e),
+            "fields": []
+        }
+
+
 @app.post("/api/analyze")
 async def analyze_documents(files: List[UploadFile] = File(...)):
     """
-    Analyze uploaded documents using Azure Document Intelligence.
+    Start async document analysis and return job ID for tracking.
     
     Args:
         files: List of uploaded PDF files
         
     Returns:
-        JSON response with analysis results for each document
+        JSON with job_id for tracking progress
     """
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
@@ -310,87 +385,90 @@ async def analyze_documents(files: List[UploadFile] = File(...)):
                 detail=f"Only PDF files are supported. Received: {file.filename}"
             )
     
-    client = get_document_intelligence_client()
-    results = []
+    # Generate job ID
+    job_id = f"job_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
     
+    # Initialize processing status
+    processing_status[job_id] = {
+        "job_id": job_id,
+        "total_files": len(files),
+        "started_at": datetime.now().isoformat(),
+        "status": "processing",
+        "files": [
+            {
+                "filename": file.filename,
+                "status": "pending",
+                "message": "Queued for processing",
+                "result": None
+            }
+            for file in files
+        ]
+    }
+    
+    # Get model ID
+    model_id = os.getenv("AZURE_DOCUMENT_MODEL_ID", "prebuilt-layout")
+    client = get_document_intelligence_client()
+    
+    # Read all files content
+    files_content = []
     for file in files:
-        try:
-            # Read file content
-            file_content = await file.read()
-            
-            # Convert file content to BytesIO for the API
-            file_stream = BytesIO(file_content)
-            file_stream.seek(0)  # Ensure we're at the start of the stream
-            
-            # Get model ID from environment variable or use custom model
-            # For your custom trained model, set this in .env:
-            # AZURE_DOCUMENT_MODEL_ID=AIHarvest_Energy_Model_v1
-            model_id = os.getenv("AZURE_DOCUMENT_MODEL_ID", "prebuilt-layout")
-            
-            # Specify the fields we want to extract
-            expected_fields = [
-                "SupplyAddress1",
-                "SupplyAddress2",
-                "ConsumptionPeriod",
-                "AccountNo",
-                "FixedEnergyPriceRate",
-                "TotalPayWithAllCharges",
-                "TotalEnergyCharge"
-            ]
-            
-            # For custom models, features and query_fields may not be needed
-            # For prebuilt models, enable key-value pair extraction
-            if model_id.startswith("prebuilt-"):
-                poller = client.begin_analyze_document(
-                    model_id=model_id,
-                    body=file_stream,
-                    content_type="application/pdf",
-                    features=[
-                        DocumentAnalysisFeature.KEY_VALUE_PAIRS,
-                        DocumentAnalysisFeature.QUERY_FIELDS
-                    ],
-                    query_fields=expected_fields
-                )
-            else:
-                # Custom model - no need for features or query_fields
-                poller = client.begin_analyze_document(
-                    model_id=model_id,
-                    body=file_stream,
-                    content_type="application/pdf"
-                )
-            
-            analyze_result = poller.result()
-            
-            # Debug: Log what we received
-            import logging
-            logging.basicConfig(level=logging.INFO)
-            logger = logging.getLogger(__name__)
-            
-            logger.info(f"Analyze result type: {type(analyze_result)}")
-            logger.info(f"Has documents: {hasattr(analyze_result, 'documents')}")
-            if hasattr(analyze_result, 'documents'):
-                logger.info(f"Documents count: {len(analyze_result.documents) if analyze_result.documents else 0}")
-                if analyze_result.documents:
-                    logger.info(f"First document has fields: {hasattr(analyze_result.documents[0], 'fields')}")
-                    if hasattr(analyze_result.documents[0], 'fields') and analyze_result.documents[0].fields:
-                        logger.info(f"Field names: {list(analyze_result.documents[0].fields.keys())}")
-            
-            # Extract fields from result
-            fields = extract_fields_from_result(analyze_result)
-            
-            results.append({
-                "filename": file.filename,
-                "status": "success",
-                "fields": fields
-            })
-            
-        except Exception as e:
-            results.append({
-                "filename": file.filename,
-                "status": "error",
-                "error": str(e),
-                "fields": []
-            })
+        content = await file.read()
+        files_content.append((content, file.filename))
+    
+    # Start processing asynchronously
+    asyncio.create_task(process_documents_async(client, files_content, job_id, model_id))
+    
+    return JSONResponse(content={"job_id": job_id, "total_files": len(files)})
+
+
+async def process_documents_async(client, files_content: List[tuple], job_id: str, model_id: str):
+    """Process all documents asynchronously."""
+    tasks = []
+    for index, (content, filename) in enumerate(files_content):
+        task = process_single_document(
+            client, content, filename, model_id, job_id, index, len(files_content)
+        )
+        tasks.append(task)
+    
+    # Process all files concurrently
+    await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # Mark job as complete
+    processing_status[job_id]["status"] = "completed"
+    processing_status[job_id]["completed_at"] = datetime.now().isoformat()
+
+
+@app.get("/api/status/{job_id}")
+async def get_status(job_id: str):
+    """Get processing status for a job."""
+    if job_id not in processing_status:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    return JSONResponse(content=processing_status[job_id])
+
+
+@app.get("/api/results/{job_id}")
+async def get_results(job_id: str):
+    """Get final results for a completed job."""
+    if job_id not in processing_status:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    job_data = processing_status[job_id]
+    
+    if job_data["status"] != "completed":
+        return JSONResponse(
+            content={"status": "processing", "message": "Job is still processing"},
+            status_code=202
+        )
+    
+    # Collect all results
+    results = []
+    for file_data in job_data["files"]:
+        if file_data["result"]:
+            results.append(file_data["result"])
+    
+    # Clean up job data after retrieval (optional)
+    # del processing_status[job_id]
     
     return JSONResponse(content={"results": results})
 
