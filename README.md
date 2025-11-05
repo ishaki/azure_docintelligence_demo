@@ -61,7 +61,7 @@ pip install -r requirements.txt
    ```
    AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT=https://your-resource-name.cognitiveservices.azure.com/
    AZURE_DOCUMENT_INTELLIGENCE_KEY=your-api-key-here
-   AZURE_DOCUMENT_MODEL_ID=AIHarvest_Energy_Model_v1
+   AZURE_DOCUMENT_MODEL_ID=YOUR_MODELNAME_v1
    ```
 
    To get these credentials:
