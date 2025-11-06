@@ -1,12 +1,16 @@
 """
 Validation script to check all project files for errors.
+
+This script validates Python, HTML, and JavaScript files for syntax errors
+and basic structural issues.
 """
 import ast
 import sys
 from pathlib import Path
+from typing import Tuple, List
 
 
-def validate_python_file(file_path: Path) -> tuple[bool, str]:
+def validate_python_file(file_path: Path) -> Tuple[bool, str]:
     """
     Validate a Python file for syntax errors.
     
@@ -27,7 +31,7 @@ def validate_python_file(file_path: Path) -> tuple[bool, str]:
         return False, f"Error: {str(e)}"
 
 
-def validate_html_file(file_path: Path) -> tuple[bool, str]:
+def validate_html_file(file_path: Path) -> Tuple[bool, str]:
     """
     Basic HTML validation - check for closing tags and structure.
     
@@ -54,7 +58,7 @@ def validate_html_file(file_path: Path) -> tuple[bool, str]:
         return False, f"Error reading file: {str(e)}"
 
 
-def validate_javascript_file(file_path: Path) -> tuple[bool, str]:
+def validate_javascript_file(file_path: Path) -> Tuple[bool, str]:
     """
     Basic JavaScript validation - check for common syntax issues.
     
@@ -72,46 +76,71 @@ def validate_javascript_file(file_path: Path) -> tuple[bool, str]:
         open_braces = content.count('{')
         close_braces = content.count('}')
         if open_braces != close_braces:
-            return False, f"Mismatched braces: {open_braces} opening, {close_braces} closing"
+            return False, (
+                f"Mismatched braces: {open_braces} opening, "
+                f"{close_braces} closing"
+            )
         
         open_parens = content.count('(')
         close_parens = content.count(')')
         if open_parens != close_parens:
-            return False, f"Mismatched parentheses: {open_parens} opening, {close_parens} closing"
+            return False, (
+                f"Mismatched parentheses: {open_parens} opening, "
+                f"{close_parens} closing"
+            )
         
         return True, ""
     except Exception as e:
         return False, f"Error reading file: {str(e)}"
 
 
-def main():
-    """Main validation function."""
+def main() -> int:
+    """
+    Main validation function.
+    
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
     project_root = Path(__file__).parent
-    errors = []
-    warnings = []
+    errors: List[str] = []
+    warnings: List[str] = []
     
     print("=" * 60)
     print("Validating Project Files")
     print("=" * 60)
     print()
     
-    # Validate Python files
+    # Validate Python files - main files
     python_files = [
         project_root / "main.py",
         project_root / "run.py",
     ]
+    
+    # Validate Python files - app package
+    app_dir = project_root / "app"
+    if app_dir.exists():
+        python_files.extend([
+            app_dir / "__init__.py",
+            app_dir / "constants.py",
+            app_dir / "config.py",
+            app_dir / "models.py",
+            app_dir / "azure_client.py",
+            app_dir / "field_extractor.py",
+            app_dir / "job_manager.py",
+            app_dir / "document_processor.py",
+        ])
     
     print("Validating Python files...")
     for py_file in python_files:
         if py_file.exists():
             is_valid, error_msg = validate_python_file(py_file)
             if is_valid:
-                print(f"  [OK] {py_file.name}")
+                print(f"  [OK] {py_file.relative_to(project_root)}")
             else:
-                print(f"  [ERROR] {py_file.name}: {error_msg}")
+                print(f"  [ERROR] {py_file.relative_to(project_root)}: {error_msg}")
                 errors.append(f"{py_file.name}: {error_msg}")
         else:
-            print(f"  [WARN] {py_file.name}: File not found")
+            print(f"  [WARN] {py_file.relative_to(project_root)}: File not found")
             warnings.append(f"{py_file.name}: File not found")
     
     print()
@@ -174,4 +203,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-

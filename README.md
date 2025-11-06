@@ -95,6 +95,44 @@ Open your browser and navigate to:
 http://localhost:8000
 ```
 
+## Logging
+
+The application automatically creates daily log files in the `logs/` directory:
+
+- **`logs/app.log`** - All application logs (INFO, DEBUG, WARNING, ERROR)
+  - Rotates daily at midnight
+  - Keeps 30 days of history
+  - Includes detailed information: timestamp, logger name, log level, function name, line number, and message
+
+- **`logs/error.log`** - Error logs only (ERROR and above)
+  - Rotates daily at midnight
+  - Keeps 90 days of history
+  - Useful for troubleshooting production issues
+
+Log files are automatically created when the application starts. The logs directory is already included in `.gitignore` to prevent committing log files to version control.
+
+### Log Levels
+
+- **DEBUG**: Detailed information for diagnosing problems
+- **INFO**: General informational messages about application operation
+- **WARNING**: Warning messages for potentially problematic situations
+- **ERROR**: Error messages for failures that don't stop the application
+
+### Viewing Logs
+
+To view logs in real-time:
+
+```bash
+# View all logs
+tail -f logs/app.log
+
+# View error logs only
+tail -f logs/error.log
+
+# View today's log file
+cat logs/app.log.$(date +%Y-%m-%d)
+```
+
 ## Usage
 
 1. **Upload Documents**: 
